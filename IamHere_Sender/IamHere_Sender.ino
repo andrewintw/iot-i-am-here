@@ -13,9 +13,11 @@
  */
 
 #include <ESP8266WiFi.h>
+#include <ESP8266WiFiMulti.h>
 #include "ThingSpeak.h"
 #include "config.h"
 
+ESP8266WiFiMulti wifiMulti;
 WiFiClient wifi_client;
 
 int sensor_data                 = 0;
@@ -32,13 +34,14 @@ present_state_t present_st      = LEFT;
 unsigned long myChannelNumber   = SECRET_CH_ID;
 unsigned int  dataFieldNumber   = 1;
 const char *myWriteAPIKey       = SECRET_WRITE_APIKEY;
-const char *ssid                = SECRET_SSID;
-const char *password            = SECRET_PASS;
-int keyIndex                    = 0;    /* your network key index number (needed only for WEP) */
 
 unsigned long setup_starttime   = 0;
 unsigned long data_sendtime     = 0;
 run_state_t run_st              = RUN_SETUP;
+
+boolean connectioWasAlive       = true;
+unsigned long chkwifi_time      = 0;
+
 
 void init_dev_io() {
     Serial.begin(115200);
@@ -60,46 +63,49 @@ void init_pir_sensor() {
         This takes 60 seconds when the sensor is first powered up. */
     if (PIR_INIT_TIME_MS > (millis() - setup_starttime)) {
         t = PIR_INIT_TIME_MS - (millis() - setup_starttime);
-        Serial.print("HC-SR501 initializing...(");
-        Serial.print(t / 1000);
-        Serial.print("/");
-        Serial.print(PIR_INIT_TIME_MS / 1000);
-        Serial.println("sec)");
+        Serial.printf("HC-SR501 initializing...(%d/%dsec)\n", (t / 1000), (PIR_INIT_TIME_MS / 1000));
         delay(t);
+    }
+}
+
+void init_wifi_cfg(wifi_sta_config_t *wifi_sta) {
+    wifi_sta_config_t *sta = wifi_sta;
+
+    while (*sta->ssid != NULL ) {
+        Serial.printf("addAP: %s / %s\n", sta->ssid, sta->password);
+        wifiMulti.addAP(sta->ssid, sta->password);
+        sta++;
     }
 }
 
 void init_net_connect() {
     unsigned int i = 0;
 
-    Serial.println();
-    Serial.print("Connecting to: ");
-    Serial.println(ssid);
-
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(ssid, password);
-
-    while (WiFi.status() != WL_CONNECTED) {
-        i++;
-        delay(500);
+    Serial.printf("\nLooking for WiFi");
+    while (wifiMulti.run() != WL_CONNECTED)
+    {
         Serial.print(".");
+        delay(500);
 
-        if (i % 2 == 0)
+        i++;
+
+        if (i % 2 == 0) {
             ledCtrl(OFF);
-        else
+        } else {
             ledCtrl(ON);
+        }
 
         if (i >= ((1 << (sizeof(uint16) * 8)) - 1)) {
             i = 0;
         }
     }
 
-    Serial.println("");
-    Serial.println("WiFi connected");
-    Serial.print("IP address: ");
-    Serial.println(WiFi.localIP());
+    Serial.printf("\nWiFi connected to: %s\n", WiFi.SSID().c_str());
+    Serial.printf("IP address: %s\n", WiFi.localIP().toString().c_str());
     ledCtrl(ON);
+}
 
+void init_cloud_services() {
     ThingSpeak.begin(wifi_client);
 }
 
@@ -108,13 +114,21 @@ void setup() {
     setup_starttime = millis();
 
     init_dev_io();
+    init_wifi_cfg(wifi_sta_cfg);
     init_net_connect();
+    init_cloud_services();
+
     send_data_to_cloud(LEFT);   /* force set LEFT state in setup */
     init_pir_sensor();
 }
 
 int send_data_to_cloud(int data) {
     int httpCode;
+
+    if (connectioWasAlive == false) {
+        Serial.println("warning: ignore data transmit! the network is disconnected.");
+        return 1;
+    }
 
     if (((millis() - data_sendtime) < SEND_INTERVAL_MS) && (run_st == RUN_LOOP)) {
         Serial.println("warning: ignore data transmit! data push interval must be greater than 15 seconds.");
@@ -126,14 +140,12 @@ int send_data_to_cloud(int data) {
     httpCode = ThingSpeak.writeField(myChannelNumber, dataFieldNumber, data, myWriteAPIKey);
 
     if (httpCode == 200) {
-        Serial.print("Channel write: ");
-        Serial.print(data);
-        Serial.println(" successful.");
+        Serial.printf("Channel write: %d successful\n", data);
         ledCtrl(BLINK_SENT);
         return 0;
     }
     else {
-        Serial.println("Problem writing to channel. HTTP error code " + String(httpCode));
+        Serial.printf("Problem writing to channel. HTTP error code: %d\n", httpCode);
         return -1;
     }
 }
@@ -234,20 +246,10 @@ void update_sensor_data() {
 
 void show_summary() {
     print_timestamp();
-
-    Serial.print("  pv:");
-    Serial.print(sensor_data);
-    Serial.print(" dc:");
-    Serial.print(detect_count);
-    Serial.print("\tndc:");
-    Serial.print(no_detect_count);
-    Serial.print("\tMax(ndc):");
-    Serial.print(max_no_detect_count);
+    Serial.printf("  pv:%d dc:%d\tndc:%d\tMax(ndc):%d", sensor_data, detect_count, no_detect_count, max_no_detect_count);
 
 #if CFG_SHOW_SEC
-    Serial.print("  ");
-    Serial.print((max_no_detect_count * LOOP_INTERVAL_MS) / 1000);
-    Serial.print("sec");
+    Serial.printf("  %dsec", ((max_no_detect_count * LOOP_INTERVAL_MS) / 1000));
 #endif
 
     if (present_st == PRESENTED) {
@@ -256,22 +258,24 @@ void show_summary() {
         Serial.print(" ... [X]");
     }
 
+    if (connectioWasAlive == true) {
+        Serial.print(" ");
+    } else {
+        Serial.print("!");
+    }
+
     if (period_st == CHK_START)
     {
-        Serial.print(" --* (");
-        Serial.print(CHK_PERIOD_TIME / 1000);
-        Serial.println("sec)");
+        Serial.printf(" --* (%dsec)\n", (CHK_PERIOD_TIME / 1000));
         period_st = CHK_IN_PERID;
     }
     else if (period_st == CHK_IN_PERID)
     {
-        Serial.print("   | ");
-        Serial.println(detect_count_in_perid);
+        Serial.printf("   | %d\n", detect_count_in_perid);
     }
     else if (period_st == CHK_END)
     {
-        Serial.print(" __x ");
-        Serial.println(detect_count_in_perid);
+        Serial.printf(" __x %d\n", detect_count_in_perid);
         period_st = CHK_NONE;
         detect_count_in_perid = 0;
 
@@ -290,9 +294,31 @@ void show_summary() {
     }
 }
 
+void monitor_wifi()
+{
+    if (((millis() - chkwifi_time) < CHK_WIFI_INTERVAL_MS) && (run_st == RUN_LOOP)) {
+        return;
+    }
+
+    chkwifi_time =  millis();
+
+    if (wifiMulti.run() != WL_CONNECTED) {
+        if (connectioWasAlive == true) {
+            connectioWasAlive = false;
+        }
+    } else if (connectioWasAlive == false) {
+        connectioWasAlive = true;
+        Serial.printf("\nWiFi RE-connected to: %s\n", WiFi.SSID().c_str());
+        Serial.printf("IP address: %s\n", WiFi.localIP().toString().c_str());
+    }
+}
+
 void loop() {
     run_st = RUN_LOOP;
+
+    monitor_wifi();
     update_sensor_data();
     show_summary();
+
     delay(LOOP_INTERVAL_MS);
 }

@@ -29,6 +29,11 @@ typedef enum {
     BTN_RELEASED,
 } button_state_t;
 
+typedef struct {
+    char ssid[32];
+    char password[64];
+} wifi_sta_config_t;
+
 #define LOOP_INTERVAL_MS            (500)
 #define BUTTON_PIN                  0               /* in my ESP-01 module, LED_BUILTIN is D2,
                                                        so don't use D2 if you want to use ESP-01 onboard LED */
@@ -37,8 +42,17 @@ typedef enum {
  * According to your WiFi settings adjust the following parameters
  * ===============================================================
  */
-#define SECRET_SSID                 "MySSID"        /* replace MySSID with your WiFi network name */
-#define SECRET_PASS                 "MyPassword"    /* replace MyPassword with your WiFi password */
+
+wifi_sta_config_t wifi_sta_cfg[] = {
+    {   "MySSID1", "MyPassword1"  },    /* replace MySSID with your WiFi network name */
+    {   "MySSID2", "MyPassword2"  },    /* replace MyPassword with your WiFi password */
+    {   "MySSID3", "MyPassword3"  },    /* add your failover WiFi AP */
+
+    /* DO NOT remove the following line  */
+    {   NULL,   NULL    },
+};
+
+#define CHK_WIFI_INTERVAL_MS        (10 * 1000)
 
 /* ============================================================================
  * According to your Cloud(ThingSpeak) settings adjust the following parameters

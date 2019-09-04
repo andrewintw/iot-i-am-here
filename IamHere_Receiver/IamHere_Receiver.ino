@@ -13,9 +13,11 @@
  */
 
 #include <ESP8266WiFi.h>
+#include <ESP8266WiFiMulti.h>
 #include "ThingSpeak.h"
 #include "config.h"
 
+ESP8266WiFiMulti wifiMulti;
 WiFiClient wifi_client;
 
 int present_st                  = LEFT;
@@ -24,14 +26,15 @@ unsigned long myChannelNumber   = SECRET_CH_ID;
 unsigned int  dataFieldNumber   = 1;
 const char *myWriteAPIKey       = SECRET_WRITE_APIKEY;
 const char *myReadAPIKey        = SECRET_READ_APIKEY;
-const char *ssid                = SECRET_SSID;
-const char *password            = SECRET_PASS;
-int keyIndex                    = 0;    /* your network key index number (needed only for WEP) */
 
 unsigned long data_sendtime     = 0;
 run_state_t run_st              = RUN_SETUP;
 
 uint8 do_send                   = 0;
+
+boolean connectioWasAlive       = true;
+unsigned long chkwifi_time      = 0;
+
 
 void init_dev_io() {
     Serial.begin(115200);
@@ -46,37 +49,44 @@ void init_dev_io() {
     Serial.println();
 }
 
+void init_wifi_cfg(wifi_sta_config_t *wifi_sta) {
+    wifi_sta_config_t *sta = wifi_sta;
+
+    while (*sta->ssid != NULL ) {
+        Serial.printf("addAP: %s / %s\n", sta->ssid, sta->password);
+        wifiMulti.addAP(sta->ssid, sta->password);
+        sta++;
+    }
+}
+
 void init_net_connect() {
     unsigned int i = 0;
 
-    Serial.println();
-    Serial.print("Connecting to: ");
-    Serial.println(ssid);
-
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(ssid, password);
-
-    while (WiFi.status() != WL_CONNECTED) {
-        i++;
-        delay(500);
+    Serial.printf("\nLooking for WiFi");
+    while (wifiMulti.run() != WL_CONNECTED)
+    {
         Serial.print(".");
+        delay(500);
 
-        if (i % 2 == 0)
+        i++;
+
+        if (i % 2 == 0) {
             ledCtrl(OFF);
-        else
+        } else {
             ledCtrl(ON);
+        }
 
         if (i >= ((1 << (sizeof(uint16) * 8)) - 1)) {
             i = 0;
         }
     }
 
-    Serial.println("");
-    Serial.println("WiFi connected");
-    Serial.print("IP address: ");
-    Serial.println(WiFi.localIP());
+    Serial.printf("\nWiFi connected to: %s\n", WiFi.SSID().c_str());
+    Serial.printf("IP address: %s\n", WiFi.localIP().toString().c_str());
     ledCtrl(ON);
+}
 
+void init_cloud_services() {
     ThingSpeak.begin(wifi_client);
 }
 
@@ -84,7 +94,9 @@ void setup() {
     run_st = RUN_SETUP;
 
     init_dev_io();
+    init_wifi_cfg(wifi_sta_cfg);
     init_net_connect();
+    init_cloud_services();
     ledCtrl(OFF);
 
     get_data_from_cloud(&present_st);
@@ -123,8 +135,7 @@ int get_data_from_cloud(int *fieldData) {
         Serial.println("Field Data: " + String(*fieldData));
 #else
         show_summary();
-        Serial.print(" <<");
-        Serial.println(*fieldData);
+        Serial.printf(" <<%d\n", *fieldData);
 #endif
         ledCtrl(BLINK_SENT);
         return 0;
@@ -155,13 +166,10 @@ int send_data_to_cloud(int data) {
         present_st = LEFT;
         do_send = 0;
 #if DEBUG
-        Serial.print("Channel write: ");
-        Serial.print(data);
-        Serial.println(" successful.");
+        Serial.printf("Channel write: %d successful\n", data);
 #else
         show_summary();
-        Serial.print(" >>");
-        Serial.println(data);
+        Serial.printf(" >>%d\n", data);
 #endif
         ledCtrl(BLINK_SENT);
         return 0;
@@ -174,18 +182,36 @@ int send_data_to_cloud(int data) {
 
 void show_summary() {
     print_timestamp();
-
-    Serial.print(" data:");
-    Serial.print(present_st);
+    Serial.printf(" data:%d", present_st);
 }
 
 int get_button_state() {
     return digitalRead(BUTTON_PIN);
 }
 
+void monitor_wifi()
+{
+    if (((millis() - chkwifi_time) < CHK_WIFI_INTERVAL_MS) && (run_st == RUN_LOOP)) {
+        return;
+    }
+
+    chkwifi_time =  millis();
+
+    if (wifiMulti.run() != WL_CONNECTED) {
+        if (connectioWasAlive == true) {
+            connectioWasAlive = false;
+        }
+    } else if (connectioWasAlive == false) {
+        connectioWasAlive = true;
+        Serial.printf("\nWiFi RE-connected to: %s\n", WiFi.SSID().c_str());
+        Serial.printf("IP address: %s\n", WiFi.localIP().toString().c_str());
+    }
+}
+
 void loop() {
     run_st = RUN_LOOP;
 
+    monitor_wifi();
     if (get_button_state() == BTN_PRESSED) {
         do_send = 1;
     }
