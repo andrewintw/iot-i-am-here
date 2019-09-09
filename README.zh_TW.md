@@ -169,6 +169,10 @@ Receiver 蠻簡單的，只是把 GPIO0 接出去成為按鈕。因為要直接�
 
 所以我用了一點迂迴的但偷懶的方式，我改寫了 IamHere_Sender 為 IamHere_SenderCSV，讓它的輸出格式是 csv 的格式。
 
+第一欄的時間是目前的時間，為了讓 review 時回想自己當時正在幹嘛，這支程式一開頭有做 NTP 校時，但沒有處理傳送接收端的 delay 補償，所以應該會差個幾秒鐘。
+
+第二欄是 UnixTime，數列的方式方便你製作 chart 的時候當作 X 軸。第三欄是 PIR out 的即時資料。最後一欄是系統目前判斷此人在不在位子上。
+
 ![](images/csvFormat.png)
 
 然後，我可以使用一些能記錄 console log 的 Terminal 軟體，例如: putty、Tera Term...等等。將整天的 log 記錄起來，然後把 data 的部分存檔成 .csv 檔，再用 Excel 存成 .xlsx 或 .xls 格式，就可以繪製圖表檢視了。
